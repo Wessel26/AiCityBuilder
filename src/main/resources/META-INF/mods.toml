@@ -1,0 +1,27 @@
+modLoader="javafml"
+loaderVersion="[47,)"
+license="MIT"
+
+[[mods]]
+modId="aicitybuilder"
+version="1.0.0"
+displayName="AI City Builder"
+authors="Unknown"
+description='''
+AI City Builder mod met humanoid player bot die zich gedraagt als een normale speler
+op weg naar diamond gear (hout -> steen -> ijzer -> diamonds).
+'''
+
+[[dependencies.aicitybuilder]]
+modId="forge"
+mandatory=true
+versionRange="[47,)"
+ordering="NONE"
+side="BOTH"
+
+[[dependencies.aicitybuilder]]
+modId="minecraft"
+mandatory=true
+versionRange="[1.20.1,1.21)"
+ordering="NONE"
+side="BOTH"

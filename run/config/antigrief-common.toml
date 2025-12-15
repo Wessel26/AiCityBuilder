@@ -1,0 +1,51 @@
+
+[bluemap]
+	#Enable live BlueMap claim markers
+	enabled = true
+	#Directory where features.json is written (BlueMap web/data)
+	outputDir = "bluemap/web/data"
+	#Feature set id for BlueMap
+	setId = "antigrief-claims"
+	#Feature set label for BlueMap
+	setLabel = "Claims"
+	#Line color RGBA hex, e.g. #00FF00FF
+	lineColor = "#00FF00FF"
+	#Fill color RGBA hex, e.g. #00FF0044
+	fillColor = "#00FF0044"
+	#Marker layer name
+	layerName = "Claims"
+	#Show labels on markers
+	showLabels = true
+	#Label format, placeholders: {owner} {area}
+	labelFormat = "{owner} • {area} blokken"
+
+[claims]
+	#Minimum claim area in blocks^2
+	#Range: 16 ~ 1000000
+	minArea = 100
+	#Maximum claim area in blocks^2
+	#Range: 16 ~ 1000000
+	maxArea = 250000
+	#Item ID used as the claim tool
+	claimTool = "minecraft:golden_shovel"
+	#Claim full height
+	fullHeightClaims = true
+	#Cost per 1 block^2 (XZ only)
+	#Range: 0.0 ~ 1000.0
+	claimCostPerBlock = 1.0
+	#Force symmetrical rastering around selection center
+	symmetricRastering = true
+	#Raster grid size in blocks (1 = every block, 16 = chunk)
+	#Range: 1 ~ 512
+	rasterUnit = 1
+
+[protection]
+	#If false, explosions won't break blocks inside claims
+	explosionsBreakBlocksInClaims = false
+
+[selection]
+	#Reset selection when shovel is put away
+	resetOnPutAway = true
+	#Also reset on generic tool switch
+	resetOnToolSwitch = false
+

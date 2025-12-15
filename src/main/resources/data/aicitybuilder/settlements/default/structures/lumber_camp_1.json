@@ -1,0 +1,15 @@
+{
+  "id": "lumber_camp_1",
+  "name": "Lumber Camp I",
+  "template": "aicitybuilder:structures/lumber_camp_1",
+  "cost": {
+    "minecraft:oak_log": 32
+  },
+  "prerequisites": [
+    "town_hall_1"
+  ],
+  "minLevel": 1,
+  "food": 0,
+  "defense": 1,
+  "market": false
+}

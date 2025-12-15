@@ -1,0 +1,9 @@
+Manifest-Version: 1.0
+Specification-Title: antigrief
+Specification-Vendor: 
+Specification-Version: 1
+Implementation-Title: antigrief
+Implementation-Version: 1.0
+Implementation-Vendor: 
+Implementation-Timestamp: 2025-10-01T14:28:17+0200
+
