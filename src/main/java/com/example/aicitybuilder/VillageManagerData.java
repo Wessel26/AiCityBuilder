@@ -5,21 +5,23 @@ import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
 import net.minecraft.resources.ResourceKey;
-import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.world.level.Level;
-import net.minecraft.world.level.saveddata.SavedData;
 import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.saveddata.SavedData;
+import com.example.aicitybuilder.settlement.SettlementState;
 
 import java.util.*;
 
 /**
  * Bewaart meerdere dorpen per wereld/dimension.
  *
- * Dit is de basis voor "Millénaire-achtige" wereldgeneratie:
+ * Basis voor "Millénaire-achtige" wereldgeneratie:
  * - meerdere dorpen
  * - minimum-afstand tussen dorpen
  * - eenvoudige lookup (nearest)
+ *
+ * Stap 1 uitbreiding:
+ * - Per dorp een SettlementState (ledger e.d.) die ook saved/loaded wordt.
  */
 public class VillageManagerData extends SavedData {
 
@@ -33,6 +35,9 @@ public class VillageManagerData extends SavedData {
 
     private final Map<UUID, VillageRecord> villages = new LinkedHashMap<>();
 
+    /** Nieuw: per village een mutable state (ledger etc.). */
+    private final Map<UUID, SettlementState> states = new HashMap<>();
+
     public static VillageManagerData get(ServerLevel level) {
         return level.getDataStorage().computeIfAbsent(
                 VillageManagerData::load,
@@ -41,11 +46,12 @@ public class VillageManagerData extends SavedData {
         );
     }
 
-    public VillageManagerData() {
-    }
+    public VillageManagerData() {}
 
     public static VillageManagerData load(CompoundTag tag) {
         VillageManagerData data = new VillageManagerData();
+
+        // Villages
         if (tag.contains("Villages", Tag.TAG_LIST)) {
             ListTag list = tag.getList("Villages", Tag.TAG_COMPOUND);
             for (int i = 0; i < list.size(); i++) {
@@ -56,16 +62,43 @@ public class VillageManagerData extends SavedData {
                 }
             }
         }
+
+        // States (ledger etc.)
+        if (tag.contains("States", Tag.TAG_LIST)) {
+            ListTag list = tag.getList("States", Tag.TAG_COMPOUND);
+            for (int i = 0; i < list.size(); i++) {
+                CompoundTag sTag = list.getCompound(i);
+                SettlementState st = SettlementState.fromNbt(sTag);
+                if (st != null) {
+                    data.states.put(st.id, st);
+                }
+            }
+        }
+
+        // Zorg dat elke village minimaal een state heeft
+        for (VillageRecord rec : data.villages.values()) {
+            data.states.computeIfAbsent(rec.id, SettlementState::new);
+        }
+
         return data;
     }
 
     @Override
     public CompoundTag save(CompoundTag tag) {
+        // Villages
         ListTag list = new ListTag();
         for (VillageRecord rec : villages.values()) {
             list.add(rec.toNbt());
         }
         tag.put("Villages", list);
+
+        // States
+        ListTag statesList = new ListTag();
+        for (SettlementState st : states.values()) {
+            statesList.add(st.toNbt());
+        }
+        tag.put("States", statesList);
+
         return tag;
     }
 
@@ -79,13 +112,25 @@ public class VillageManagerData extends SavedData {
         return Optional.ofNullable(villages.get(id));
     }
 
+    /** Nieuw: haal (en maak indien nodig) de state voor een village. */
+    public SettlementState getState(UUID villageId) {
+        SettlementState st = states.get(villageId);
+        if (st == null) {
+            st = new SettlementState(villageId);
+            states.put(villageId, st);
+            setDirty();
+        }
+        return st;
+    }
+
     /**
      * Check of er al een dorp "in" deze chunk bestaat (center in dezelfde chunk).
      */
-    public boolean hasVillageInChunk(ResourceKey<Level> dimension, int chunkX, int chunkZ) {
+    public boolean hasVillageInChunk(ResourceKey<?> dimension, int chunkX, int chunkZ) {
         long key = ChunkPos.asLong(chunkX, chunkZ);
+        String dimStr = dimension.location().toString();
         for (VillageRecord rec : villages.values()) {
-            if (rec.dimension.equals(dimension.location().toString()) && rec.homeChunkLong == key) {
+            if (rec.dimension.equals(dimStr) && rec.homeChunkLong == key) {
                 return true;
             }
         }
@@ -100,7 +145,7 @@ public class VillageManagerData extends SavedData {
     }
 
     public boolean canPlaceVillageHere(ServerLevel level, BlockPos center, int minDistance) {
-        ResourceKey<Level> dim = level.dimension();
+        ResourceKey<?> dim = level.dimension();
         int cx = center.getX();
         int cz = center.getZ();
         int minDistSq = minDistance * minDistance;
@@ -111,11 +156,14 @@ public class VillageManagerData extends SavedData {
             return false;
         }
 
+        String dimStr = dim.location().toString();
         for (VillageRecord rec : villages.values()) {
-            if (!rec.dimension.equals(dim.location().toString())) continue;
+            if (!rec.dimension.equals(dimStr)) continue;
+
             long dx = (long) rec.centerX - cx;
             long dz = (long) rec.centerZ - cz;
             long distSq = dx * dx + dz * dz;
+
             if (distSq < minDistSq) {
                 return false;
             }
@@ -130,6 +178,10 @@ public class VillageManagerData extends SavedData {
         UUID id = UUID.randomUUID();
         VillageRecord rec = VillageRecord.create(id, level.dimension(), center, DEFAULT_RADIUS);
         villages.put(id, rec);
+
+        // Nieuw: state aanmaken
+        states.put(id, new SettlementState(id));
+
         setDirty();
         return rec;
     }
@@ -138,7 +190,9 @@ public class VillageManagerData extends SavedData {
      * Vind het dichtstbijzijnde dorp binnen maxDistance (horizontaal gemeten).
      */
     public Optional<VillageRecord> findNearest(ServerLevel level, BlockPos pos, int maxDistance) {
-        ResourceKey<Level> dim = level.dimension();
+        ResourceKey<?> dim = level.dimension();
+        String dimStr = dim.location().toString();
+
         int px = pos.getX();
         int pz = pos.getZ();
         int maxDistSq = maxDistance * maxDistance;
@@ -147,10 +201,12 @@ public class VillageManagerData extends SavedData {
         long bestSq = Long.MAX_VALUE;
 
         for (VillageRecord rec : villages.values()) {
-            if (!rec.dimension.equals(dim.location().toString())) continue;
+            if (!rec.dimension.equals(dimStr)) continue;
+
             long dx = (long) rec.centerX - px;
             long dz = (long) rec.centerZ - pz;
             long distSq = dx * dx + dz * dz;
+
             if (distSq <= maxDistSq && distSq < bestSq) {
                 bestSq = distSq;
                 best = rec;
@@ -165,6 +221,7 @@ public class VillageManagerData extends SavedData {
     public void setStoragePos(UUID villageId, BlockPos storage) {
         VillageRecord rec = villages.get(villageId);
         if (rec == null) return;
+
         rec.storageX = storage.getX();
         rec.storageY = storage.getY();
         rec.storageZ = storage.getZ();
@@ -175,12 +232,14 @@ public class VillageManagerData extends SavedData {
 
     public static final class VillageRecord {
         public final UUID id;
+
         /** dimension als string (ResourceLocation) */
         public final String dimension;
+
         public final int centerX, centerY, centerZ;
         public final int radius;
 
-        /** opgeslagen storage pos; -1 = none */
+        /** opgeslagen storage pos; MIN_VALUE = none */
         public int storageX = Integer.MIN_VALUE;
         public int storageY = Integer.MIN_VALUE;
         public int storageZ = Integer.MIN_VALUE;
@@ -198,14 +257,12 @@ public class VillageManagerData extends SavedData {
             this.homeChunkLong = homeChunkLong;
         }
 
-        public static VillageRecord create(UUID id, ResourceKey<Level> dim, BlockPos center, int radius) {
+        public static VillageRecord create(UUID id, ResourceKey<?> dim, BlockPos center, int radius) {
             ChunkPos cp = new ChunkPos(center);
             return new VillageRecord(
                     id,
                     dim.location().toString(),
-                    center.getX(),
-                    center.getY(),
-                    center.getZ(),
+                    center.getX(), center.getY(), center.getZ(),
                     radius,
                     ChunkPos.asLong(cp.x, cp.z)
             );
@@ -232,6 +289,7 @@ public class VillageManagerData extends SavedData {
             t.putInt("Y", centerY);
             t.putInt("Z", centerZ);
             t.putInt("Radius", radius);
+
             if (hasStorage()) {
                 CompoundTag s = new CompoundTag();
                 s.putInt("X", storageX);
@@ -239,27 +297,38 @@ public class VillageManagerData extends SavedData {
                 s.putInt("Z", storageZ);
                 t.put("Storage", s);
             }
+
             t.putLong("HomeChunk", homeChunkLong);
             return t;
         }
 
         public static VillageRecord fromNbt(CompoundTag t) {
             if (!t.hasUUID("Id") || !t.contains("Dim")) return null;
+
             UUID id = t.getUUID("Id");
             String dim = t.getString("Dim");
             int x = t.getInt("X");
             int y = t.getInt("Y");
             int z = t.getInt("Z");
             int radius = t.contains("Radius") ? t.getInt("Radius") : DEFAULT_RADIUS;
-            long homeChunk = t.contains("HomeChunk") ? t.getLong("HomeChunk") : ChunkPos.asLong(new ChunkPos(new BlockPos(x, y, z)).x, new ChunkPos(new BlockPos(x, y, z)).z);
+
+            long homeChunk;
+            if (t.contains("HomeChunk")) {
+                homeChunk = t.getLong("HomeChunk");
+            } else {
+                ChunkPos cp = new ChunkPos(new BlockPos(x, y, z));
+                homeChunk = ChunkPos.asLong(cp.x, cp.z);
+            }
 
             VillageRecord rec = new VillageRecord(id, dim, x, y, z, radius, homeChunk);
+
             if (t.contains("Storage", Tag.TAG_COMPOUND)) {
                 CompoundTag s = t.getCompound("Storage");
                 rec.storageX = s.getInt("X");
                 rec.storageY = s.getInt("Y");
                 rec.storageZ = s.getInt("Z");
             }
+
             return rec;
         }
     }
