@@ -3,11 +3,15 @@ package com.example.aicitybuilder.village;
 import com.example.aicitybuilder.BotJobType;
 import com.example.aicitybuilder.VillageData;
 import com.example.aicitybuilder.VillageManagerData;
+import com.example.aicitybuilder.building.Blueprints;
 import com.example.aicitybuilder.settlement.SettlementState;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
 import net.minecraftforge.event.TickEvent;
@@ -18,14 +22,13 @@ import java.util.Optional;
 import java.util.UUID;
 
 /**
- * Post periodiek tickets op basis van dorpsbehoeften.
+ * Tickets posten op basis van needs (Millénaire-achtig).
  *
- * v1:
- * - logs laag -> LUMBERJACK tickets
- * - items op grond + storage -> HAULER tickets
- *
- * v2 (Miner MVP):
- * - cobble laag (uit SettlementState ledger) -> MINER tickets (mine spot dichtbij center)
+ * Stap 7:
+ * - kijkt naar volgende build-step
+ * - als ledger te weinig heeft:
+ *    - post producer tickets (LUMBERJACK/MINER) waar mogelijk
+ *    - post material haul tickets als items al op de grond liggen
  */
 public class VillageJobPlanner {
 
@@ -39,11 +42,17 @@ public class VillageJobPlanner {
 
     private static final int MAX_OPEN_HAUL_TICKETS = 10;
 
-    // Miner tuning
+    // Miner tuning (algemene cobble-need)
     private static final int MIN_COBBLE_FOR_BUILDING = 128;
     private static final int MAX_OPEN_MINER_TICKETS = 4;
 
-    // Ledger item IDs
+    // Project supply tuning
+    private static final int PROJECT_CHECK_RADIUS = 256;
+    private static final int PROJECT_ITEM_BUFFER = 8;          // minimale buffer in ledger voor “next item”
+    private static final int PROJECT_ITEM_ENTITY_RADIUS = 32;  // waar we drops zoeken om te haul’en
+    private static final int MAX_OPEN_PROJECT_HAUL = 6;
+    private static final int MAX_OPEN_PROJECT_PRODUCE = 6;
+
     private static final String ITEM_COBBLE = "minecraft:cobblestone";
 
     private int cooldown = 0;
@@ -70,7 +79,10 @@ public class VillageJobPlanner {
 
         BlockPos center = data.getCenter();
 
-        // 1) Lumberjack tickets (oude gedrag)
+        // 0) NEW: Project-driven supply (missing materials -> produce/haul)
+        tryPostProjectSupplyTickets(level, data, board, center, now);
+
+        // 1) Lumberjack tickets (legacy need)
         if (data.getTotalLogs() < MIN_LOGS_FOR_BUILDING) {
             int openLumber = countOpen(board, BotJobType.LUMBERJACK);
             int toCreate = Math.max(0, MAX_OPEN_LUMBER_TICKETS - openLumber);
@@ -84,7 +96,7 @@ public class VillageJobPlanner {
             }
         }
 
-        // 2) Miner tickets (cobble laag) — NU UIT LEDGER
+        // 2) Miner tickets (general cobble need) — from ledger
         int cobbleInLedger = getLedgerCount(level, center, ITEM_COBBLE);
         if (cobbleInLedger < MIN_COBBLE_FOR_BUILDING) {
             int openMiner = countOpen(board, BotJobType.MINER);
@@ -99,7 +111,7 @@ public class VillageJobPlanner {
             }
         }
 
-        // 3) Hauler tickets (items naar opslag)
+        // 3) Hauler tickets (generic ground cleanup)
         if (data.hasStoragePos()) {
             int openHaul = countOpen(board, BotJobType.HAULER);
             int budget = Math.max(0, MAX_OPEN_HAUL_TICKETS - openHaul);
@@ -127,14 +139,124 @@ public class VillageJobPlanner {
     }
 
     /**
-     * Haal een item-count uit de settlement ledger op.
-     * We zoeken het settlement dat het dichtst bij het legacy center ligt.
+     * Stap 7: project-driven supply.
+     * - Pak de volgende blueprint step.
+     * - Bepaal het cost item.
+     * - Check ledger buffer.
+     * - Post producer tickets (lumber/miner) waar mogelijk.
+     * - Post haul tickets als items al op de grond liggen.
      */
+    private static void tryPostProjectSupplyTickets(ServerLevel level, VillageData data, JobBoard board, BlockPos center, long now) {
+        if (!data.hasActiveProject()) return;
+        if (!data.hasStoragePos()) return;
+
+        List<Blueprints.BuildStep> steps = Blueprints.get(data.getProjectId());
+        if (steps == null || steps.isEmpty()) return;
+
+        int idx = data.getProjectStep();
+        if (idx < 0 || idx >= steps.size()) return;
+
+        Blueprints.BuildStep step = steps.get(idx);
+        BlockState target = step.state();
+        if (target == null || target.isAir()) return;
+
+        Item costItem = target.getBlock().asItem();
+        if (costItem == null || costItem == Items.AIR) return;
+
+        String itemId = BuiltInRegistries.ITEM.getKey(costItem).toString();
+
+        // Find settlement near center
+        VillageManagerData mgr = VillageManagerData.get(level);
+        Optional<VillageManagerData.VillageRecord> nearest = mgr.findNearest(level, center, PROJECT_CHECK_RADIUS);
+        if (nearest.isEmpty()) return;
+
+        UUID vid = nearest.get().id;
+        SettlementState st = mgr.getState(vid);
+
+        int have = st.getCount(itemId);
+        if (have >= PROJECT_ITEM_BUFFER) return; // genoeg buffer -> niets doen
+
+        int need = PROJECT_ITEM_BUFFER - have;
+
+        // 1) Producer ticket (als we het kunnen produceren)
+        // Anti-spam: beperkte open producer tickets totaal
+        int openProduceBudget = Math.max(0, MAX_OPEN_PROJECT_PRODUCE - countOpenProducer(board));
+        if (openProduceBudget > 0) {
+            BotJobType producer = mapItemToProducer(itemId);
+
+            if (producer == BotJobType.LUMBERJACK) {
+                // logs kunnen we produceren
+                BlockPos log = findNaturalLog(level, center, LOG_SEARCH_RADIUS);
+                if (log != null && !board.hasOpenTicketNear(BotJobType.LUMBERJACK, log, 4)) {
+                    board.post(JobTicket.material(BotJobType.LUMBERJACK, 20, log, now, itemId, Math.max(1, need)));
+                }
+            } else if (producer == BotJobType.MINER) {
+                // cobble kunnen we produceren
+                BlockPos mineSpot = findMineSpot(level, center, 10);
+                if (mineSpot != null && !board.hasOpenTicketNear(BotJobType.MINER, mineSpot, 4)) {
+                    board.post(JobTicket.material(BotJobType.MINER, 18, mineSpot, now, itemId, Math.max(1, need)));
+                }
+            } else {
+                // planks/overig: nog geen crafting/farming -> producer is null
+                // (Later: CraftingJob/FarmerJob)
+            }
+        }
+
+        // 2) Haul tickets voor dit item (alleen als er drops bestaan)
+        int openMaterialHaul = countOpenMaterial(board, BotJobType.HAULER, itemId);
+        int haulBudget = Math.max(0, MAX_OPEN_PROJECT_HAUL - openMaterialHaul);
+        if (haulBudget <= 0) return;
+
+        List<ItemEntity> items = level.getEntitiesOfClass(
+                ItemEntity.class,
+                new AABB(
+                        center.getX() - PROJECT_ITEM_ENTITY_RADIUS, center.getY() - 8, center.getZ() - PROJECT_ITEM_ENTITY_RADIUS,
+                        center.getX() + PROJECT_ITEM_ENTITY_RADIUS, center.getY() + 8, center.getZ() + PROJECT_ITEM_ENTITY_RADIUS
+                ),
+                e -> e.isAlive() && !e.getItem().isEmpty() && e.getItem().getItem() == costItem
+        );
+
+        for (ItemEntity ent : items) {
+            if (haulBudget <= 0) break;
+
+            BlockPos p = ent.blockPosition();
+            if (board.hasOpenTicketNear(BotJobType.HAULER, p, 2)) continue;
+
+            board.post(JobTicket.material(BotJobType.HAULER, 16, p, now, itemId, Math.max(1, need)));
+            haulBudget--;
+
+            need -= Math.max(1, ent.getItem().getCount());
+            if (need <= 0) break;
+        }
+    }
+
+    /**
+     * Map itemId -> producer job.
+     * - logs: lumberjack
+     * - cobble: miner
+     * - planks: (nog niet produceerbaar zonder crafting-job) -> null
+     */
+    private static BotJobType mapItemToProducer(String itemId) {
+        if (itemId == null) return null;
+
+        if (itemId.endsWith("_log") || itemId.contains(":oak_log") || itemId.contains(":spruce_log")
+                || itemId.contains(":birch_log") || itemId.contains(":jungle_log")
+                || itemId.contains(":acacia_log") || itemId.contains(":dark_oak_log")) {
+            return BotJobType.LUMBERJACK;
+        }
+
+        if (ITEM_COBBLE.equals(itemId)) {
+            return BotJobType.MINER;
+        }
+
+        // planks -> later crafting job
+        return null;
+    }
+
     private static int getLedgerCount(ServerLevel level, BlockPos center, String itemId) {
         VillageManagerData mgr = VillageManagerData.get(level);
-        Optional<VillageManagerData.VillageRecord> nearest = mgr.findNearest(level, center, 256);
+        Optional<VillageManagerData.VillageRecord> nearest = mgr.findNearest(level, center, PROJECT_CHECK_RADIUS);
         if (nearest.isEmpty()) return 0;
-
         SettlementState st = mgr.getState(nearest.get().id);
         return st.getCount(itemId);
     }
@@ -147,9 +269,27 @@ public class VillageJobPlanner {
         return n;
     }
 
-    /**
-     * Zoekt een log-blok dat waarschijnlijk bij een natuurlijke boom hoort.
-     */
+    private static int countOpenMaterial(JobBoard board, BotJobType type, String itemId) {
+        int n = 0;
+        for (JobTicket t : board.getAllTickets()) {
+            if (t.getStatus() != JobStatus.OPEN) continue;
+            if (t.getType() != type) continue;
+            if (!t.hasRequestedItem()) continue;
+            if (!itemId.equals(t.getRequestedItemId())) continue;
+            n++;
+        }
+        return n;
+    }
+
+    private static int countOpenProducer(JobBoard board) {
+        int n = 0;
+        for (JobTicket t : board.getAllTickets()) {
+            if (t.getStatus() != JobStatus.OPEN) continue;
+            if (t.getType() == BotJobType.LUMBERJACK || t.getType() == BotJobType.MINER) n++;
+        }
+        return n;
+    }
+
     private static BlockPos findNaturalLog(ServerLevel level, BlockPos center, int radius) {
         for (int tries = 0; tries < 80; tries++) {
             int dx = level.random.nextInt(radius * 2 + 1) - radius;
@@ -180,10 +320,6 @@ public class VillageJobPlanner {
         return false;
     }
 
-    /**
-     * Mine spot = een stone block net onder surface dichtbij center.
-     * MVP: zoekt in een kleine radius, pakt een plek op y-2..y-12 waar stone is.
-     */
     private static BlockPos findMineSpot(ServerLevel level, BlockPos center, int radius) {
         for (int tries = 0; tries < 60; tries++) {
             int dx = level.random.nextInt(radius * 2 + 1) - radius;
