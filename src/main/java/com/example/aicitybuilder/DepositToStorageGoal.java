@@ -1,22 +1,26 @@
 package com.example.aicitybuilder;
 
+import com.example.aicitybuilder.settlement.SettlementState;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.ai.goal.Goal;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.entity.ChestBlockEntity;
-import net.minecraft.world.level.block.state.BlockState;
-import net.minecraft.world.inventory.ContainerData;
 
 import java.util.EnumSet;
+import java.util.UUID;
 
 /**
  * AI-doel voor bots om hun inventory te legen in het dorps-opslag-huis.
  * Werkt samen met VillageData.getStoragePos().
+ *
+ * Stap 3:
+ * - Als items daadwerkelijk in de chest verdwijnen, update de SettlementState ledger
+ *   voor het settlement waar de bot bij hoort (bot.villageId).
  */
 public class DepositToStorageGoal extends Goal {
-
     private final BotEntity bot;
     private BlockPos storagePos;
     private boolean finished;
@@ -29,6 +33,7 @@ public class DepositToStorageGoal extends Goal {
     @Override
     public boolean canUse() {
         if (bot.level().isClientSide) return false;
+
         VillageData village = bot.getVillageData();
         if (village == null || !village.hasStoragePos()) return false;
 
@@ -51,6 +56,7 @@ public class DepositToStorageGoal extends Goal {
     public boolean canContinueToUse() {
         if (finished) return false;
         if (bot.level().isClientSide) return false;
+
         // Stoppen als inventory leeg is
         for (int i = 0; i < bot.getInventory().getContainerSize(); i++) {
             if (!bot.getInventory().getItem(i).isEmpty()) {
@@ -84,11 +90,16 @@ public class DepositToStorageGoal extends Goal {
             return;
         }
 
-        // Dichtbij genoeg: probeer te dumpen in de chest, anders droppen we gewoon items op de grond
+        // Dichtbij genoeg: probeer te dumpen in de chest, anders droppen we items op de grond
         if (!(bot.level() instanceof ServerLevel serverLevel)) {
             finished = true;
             return;
         }
+
+        // Settlement / ledger context (kan null zijn als bot nog niet gekoppeld is)
+        UUID vid = bot.getVillageId();
+        VillageManagerData manager = VillageManagerData.get(serverLevel);
+        SettlementState state = (vid != null) ? manager.getState(vid) : null;
 
         BlockEntity be = serverLevel.getBlockEntity(storagePos);
         if (be instanceof ChestBlockEntity chest) {
@@ -97,29 +108,51 @@ public class DepositToStorageGoal extends Goal {
                 ItemStack stack = bot.getInventory().getItem(i);
                 if (stack.isEmpty()) continue;
 
+                // We rekenen moved op basis van count-delta
+                int before = stack.getCount();
+                String itemId = BuiltInRegistries.ITEM.getKey(stack.getItem()).toString();
+
                 ItemStack remaining = stack;
 
                 for (int slot = 0; slot < chest.getContainerSize() && !remaining.isEmpty(); slot++) {
                     ItemStack chestStack = chest.getItem(slot);
+
                     if (chestStack.isEmpty()) {
+                        // alles past in lege slot
                         chest.setItem(slot, remaining);
                         remaining = ItemStack.EMPTY;
                         break;
-                    } else if (ItemStack.isSameItemSameTags(chestStack, remaining) &&
-                               chestStack.getCount() < chestStack.getMaxStackSize()) {
+                    }
+
+                    if (ItemStack.isSameItemSameTags(chestStack, remaining)
+                            && chestStack.getCount() < chestStack.getMaxStackSize()) {
+
                         int space = chestStack.getMaxStackSize() - chestStack.getCount();
                         int toMove = Math.min(space, remaining.getCount());
-                        chestStack.grow(toMove);
-                        remaining.shrink(toMove);
+
+                        if (toMove > 0) {
+                            chestStack.grow(toMove);
+                            remaining.shrink(toMove);
+                        }
                     }
                 }
 
+                // Update bot inventory
                 bot.getInventory().setItem(i, remaining);
+
+                // Ledger update: alleen wat echt uit bot-inventory is verdwenen
+                int after = remaining.isEmpty() ? 0 : remaining.getCount();
+                int moved = before - after;
+
+                if (state != null && moved > 0) {
+                    state.add(itemId, moved);
+                    manager.setDirty();
+                }
             }
 
             chest.setChanged();
         } else {
-            // Geen geldige chest? Drop dan alles op de grond
+            // Geen geldige chest? Drop dan alles op de grond (geen ledger update)
             for (int i = 0; i < bot.getInventory().getContainerSize(); i++) {
                 ItemStack stack = bot.getInventory().getItem(i);
                 if (!stack.isEmpty()) {
