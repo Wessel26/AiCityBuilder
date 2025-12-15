@@ -1,182 +1,191 @@
 {
   "minecraft:recipes/redstone/lever": {
     "criteria": {
-      "has_cobblestone": "2025-12-15 19:34:21 +0100"
+      "has_cobblestone": "2025-12-15 20:23:19 +0100"
     },
     "done": true
   },
-  "minecraft:recipes/building_blocks/andesite_stairs_from_andesite_stonecutting": {
+  "minecraft:recipes/building_blocks/oak_slab": {
     "criteria": {
-      "has_andesite": "2025-12-15 19:34:28 +0100"
+      "has_planks": "2025-12-15 20:22:41 +0100"
+    },
+    "done": true
+  },
+  "minecraft:recipes/decorations/oak_sign": {
+    "criteria": {
+      "has_planks": "2025-12-15 20:22:41 +0100"
+    },
+    "done": true
+  },
+  "minecraft:recipes/redstone/oak_trapdoor": {
+    "criteria": {
+      "has_planks": "2025-12-15 20:22:41 +0100"
     },
     "done": true
   },
   "minecraft:recipes/combat/stone_sword": {
     "criteria": {
-      "has_cobblestone": "2025-12-15 19:34:21 +0100"
+      "has_cobblestone": "2025-12-15 20:23:19 +0100"
     },
     "done": true
   },
   "minecraft:recipes/decorations/cobblestone_wall": {
     "criteria": {
-      "has_cobblestone": "2025-12-15 19:34:21 +0100"
+      "has_cobblestone": "2025-12-15 20:23:19 +0100"
     },
     "done": true
   },
   "minecraft:recipes/tools/stone_pickaxe": {
     "criteria": {
-      "has_cobblestone": "2025-12-15 19:34:21 +0100"
+      "has_cobblestone": "2025-12-15 20:23:19 +0100"
     },
     "done": true
   },
   "minecraft:recipes/tools/stone_axe": {
     "criteria": {
-      "has_cobblestone": "2025-12-15 19:34:21 +0100"
+      "has_cobblestone": "2025-12-15 20:23:19 +0100"
+    },
+    "done": true
+  },
+  "minecraft:recipes/redstone/oak_fence_gate": {
+    "criteria": {
+      "has_planks": "2025-12-15 20:22:41 +0100"
     },
     "done": true
   },
   "minecraft:story/mine_stone": {
     "criteria": {
-      "get_stone": "2025-12-15 19:34:21 +0100"
+      "get_stone": "2025-12-15 20:23:19 +0100"
     },
     "done": true
   },
   "minecraft:recipes/decorations/furnace": {
     "criteria": {
-      "has_cobblestone": "2025-12-15 19:34:21 +0100"
-    },
-    "done": true
-  },
-  "minecraft:recipes/building_blocks/andesite_stairs": {
-    "criteria": {
-      "has_andesite": "2025-12-15 19:34:28 +0100"
+      "has_cobblestone": "2025-12-15 20:23:19 +0100"
     },
     "done": true
   },
   "minecraft:recipes/misc/charcoal": {
     "criteria": {
-      "has_log": "2025-12-15 19:36:18 +0100"
+      "has_log": "2025-12-15 20:22:39 +0100"
     },
     "done": true
   },
-  "minecraft:recipes/building_blocks/polished_andesite_from_andesite_stonecutting": {
+  "minecraft:recipes/redstone/oak_pressure_plate": {
     "criteria": {
-      "has_andesite": "2025-12-15 19:34:28 +0100"
+      "has_planks": "2025-12-15 20:22:41 +0100"
     },
     "done": true
   },
-  "minecraft:recipes/building_blocks/polished_andesite": {
+  "minecraft:recipes/redstone/oak_door": {
     "criteria": {
-      "has_andesite": "2025-12-15 19:34:28 +0100"
-    },
-    "done": true
-  },
-  "minecraft:recipes/decorations/andesite_wall_from_andesite_stonecutting": {
-    "criteria": {
-      "has_andesite": "2025-12-15 19:34:28 +0100"
+      "has_planks": "2025-12-15 20:22:41 +0100"
     },
     "done": true
   },
   "minecraft:recipes/decorations/crafting_table": {
     "criteria": {
-      "unlock_right_away": "2025-12-15 19:33:20 +0100"
+      "unlock_right_away": "2025-12-15 20:21:53 +0100"
+    },
+    "done": true
+  },
+  "minecraft:recipes/misc/stick": {
+    "criteria": {
+      "has_planks": "2025-12-15 20:22:41 +0100"
     },
     "done": true
   },
   "minecraft:recipes/building_blocks/cobblestone_slab": {
     "criteria": {
-      "has_cobblestone": "2025-12-15 19:34:21 +0100"
+      "has_cobblestone": "2025-12-15 20:23:19 +0100"
     },
     "done": true
   },
   "minecraft:recipes/building_blocks/cobblestone_slab_from_cobblestone_stonecutting": {
     "criteria": {
-      "has_cobblestone": "2025-12-15 19:34:21 +0100"
+      "has_cobblestone": "2025-12-15 20:23:19 +0100"
     },
     "done": true
   },
-  "minecraft:recipes/building_blocks/polished_andesite_slab_from_andesite_stonecutting": {
+  "minecraft:recipes/building_blocks/oak_stairs": {
     "criteria": {
-      "has_andesite": "2025-12-15 19:34:28 +0100"
+      "has_planks": "2025-12-15 20:22:41 +0100"
+    },
+    "done": true
+  },
+  "minecraft:recipes/decorations/oak_fence": {
+    "criteria": {
+      "has_planks": "2025-12-15 20:22:41 +0100"
     },
     "done": true
   },
   "minecraft:recipes/building_blocks/oak_planks": {
     "criteria": {
-      "has_logs": "2025-12-15 19:36:18 +0100"
+      "has_logs": "2025-12-15 20:22:39 +0100"
     },
     "done": true
   },
   "minecraft:recipes/building_blocks/stone": {
     "criteria": {
-      "has_cobblestone": "2025-12-15 19:34:21 +0100"
+      "has_cobblestone": "2025-12-15 20:23:19 +0100"
     },
     "done": true
   },
   "minecraft:adventure/adventuring_time": {
     "criteria": {
-      "minecraft:forest": "2025-12-15 19:33:21 +0100",
-      "minecraft:plains": "2025-12-15 19:33:31 +0100"
+      "minecraft:sparse_jungle": "2025-12-15 20:22:06 +0100",
+      "minecraft:river": "2025-12-15 20:22:07 +0100",
+      "minecraft:forest": "2025-12-15 20:21:54 +0100",
+      "minecraft:jungle": "2025-12-15 20:22:05 +0100",
+      "minecraft:plains": "2025-12-15 20:22:13 +0100"
     },
     "done": false
   },
+  "minecraft:recipes/decorations/barrel": {
+    "criteria": {
+      "has_planks": "2025-12-15 20:22:41 +0100"
+    },
+    "done": true
+  },
   "minecraft:recipes/decorations/cobblestone_wall_from_cobblestone_stonecutting": {
     "criteria": {
-      "has_cobblestone": "2025-12-15 19:34:21 +0100"
-    },
-    "done": true
-  },
-  "minecraft:recipes/decorations/andesite_wall": {
-    "criteria": {
-      "has_andesite": "2025-12-15 19:34:28 +0100"
-    },
-    "done": true
-  },
-  "minecraft:recipes/building_blocks/andesite_slab": {
-    "criteria": {
-      "has_andesite": "2025-12-15 19:34:28 +0100"
+      "has_cobblestone": "2025-12-15 20:23:19 +0100"
     },
     "done": true
   },
   "minecraft:recipes/building_blocks/cobblestone_stairs_from_cobblestone_stonecutting": {
     "criteria": {
-      "has_cobblestone": "2025-12-15 19:34:21 +0100"
-    },
-    "done": true
-  },
-  "minecraft:recipes/building_blocks/polished_andesite_stairs_from_andesite_stonecutting": {
-    "criteria": {
-      "has_andesite": "2025-12-15 19:34:28 +0100"
+      "has_cobblestone": "2025-12-15 20:23:19 +0100"
     },
     "done": true
   },
   "minecraft:recipes/building_blocks/cobblestone_stairs": {
     "criteria": {
-      "has_cobblestone": "2025-12-15 19:34:21 +0100"
+      "has_cobblestone": "2025-12-15 20:23:19 +0100"
     },
     "done": true
   },
   "minecraft:recipes/tools/stone_hoe": {
     "criteria": {
-      "has_cobblestone": "2025-12-15 19:34:21 +0100"
-    },
-    "done": true
-  },
-  "minecraft:recipes/building_blocks/andesite_slab_from_andesite_stonecutting": {
-    "criteria": {
-      "has_andesite": "2025-12-15 19:34:28 +0100"
+      "has_cobblestone": "2025-12-15 20:23:19 +0100"
     },
     "done": true
   },
   "minecraft:recipes/tools/stone_shovel": {
     "criteria": {
-      "has_cobblestone": "2025-12-15 19:34:21 +0100"
+      "has_cobblestone": "2025-12-15 20:23:19 +0100"
     },
     "done": true
   },
   "minecraft:recipes/building_blocks/oak_wood": {
     "criteria": {
-      "has_log": "2025-12-15 19:36:18 +0100"
+      "has_log": "2025-12-15 20:22:39 +0100"
+    },
+    "done": true
+  },
+  "minecraft:recipes/redstone/oak_button": {
+    "criteria": {
+      "has_planks": "2025-12-15 20:22:41 +0100"
     },
     "done": true
   },

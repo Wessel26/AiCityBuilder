@@ -21,18 +21,9 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
-/**
- * Tickets posten op basis van needs (Millénaire-achtig).
- *
- * Stap 7:
- * - kijkt naar volgende build-step
- * - als ledger te weinig heeft:
- *    - post producer tickets (LUMBERJACK/MINER) waar mogelijk
- *    - post material haul tickets als items al op de grond liggen
- */
 public class VillageJobPlanner {
 
-    private static final int PLAN_INTERVAL_TICKS = 100; // 5 sec
+    private static final int PLAN_INTERVAL_TICKS = 100;
 
     private static final int LOG_SEARCH_RADIUS = 20;
     private static final int ITEM_SEARCH_RADIUS = 24;
@@ -42,14 +33,12 @@ public class VillageJobPlanner {
 
     private static final int MAX_OPEN_HAUL_TICKETS = 10;
 
-    // Miner tuning (algemene cobble-need)
     private static final int MIN_COBBLE_FOR_BUILDING = 128;
     private static final int MAX_OPEN_MINER_TICKETS = 4;
 
-    // Project supply tuning
     private static final int PROJECT_CHECK_RADIUS = 256;
-    private static final int PROJECT_ITEM_BUFFER = 8;          // minimale buffer in ledger voor “next item”
-    private static final int PROJECT_ITEM_ENTITY_RADIUS = 32;  // waar we drops zoeken om te haul’en
+    private static final int PROJECT_ITEM_BUFFER = 8;
+    private static final int PROJECT_ITEM_ENTITY_RADIUS = 32;
     private static final int MAX_OPEN_PROJECT_HAUL = 6;
     private static final int MAX_OPEN_PROJECT_PRODUCE = 6;
 
@@ -73,16 +62,14 @@ public class VillageJobPlanner {
 
         JobBoard board = data.getJobBoard();
         long now = level.getGameTime();
-
-        // Oude tickets opruimen (5 minuten)
         board.cleanup(now, 20L * 60L * 5L);
 
         BlockPos center = data.getCenter();
 
-        // 0) NEW: Project-driven supply (missing materials -> produce/haul)
+        // Project-driven supply
         tryPostProjectSupplyTickets(level, data, board, center, now);
 
-        // 1) Lumberjack tickets (legacy need)
+        // Legacy lumber need
         if (data.getTotalLogs() < MIN_LOGS_FOR_BUILDING) {
             int openLumber = countOpen(board, BotJobType.LUMBERJACK);
             int toCreate = Math.max(0, MAX_OPEN_LUMBER_TICKETS - openLumber);
@@ -90,13 +77,12 @@ public class VillageJobPlanner {
             for (int i = 0; i < toCreate; i++) {
                 BlockPos log = findNaturalLog(level, center, LOG_SEARCH_RADIUS);
                 if (log == null) break;
-
                 if (board.hasOpenTicketNear(BotJobType.LUMBERJACK, log, 4)) continue;
                 board.post(new JobTicket(UUID.randomUUID(), BotJobType.LUMBERJACK, 10, log, now));
             }
         }
 
-        // 2) Miner tickets (general cobble need) — from ledger
+        // General cobble need from ledger
         int cobbleInLedger = getLedgerCount(level, center, ITEM_COBBLE);
         if (cobbleInLedger < MIN_COBBLE_FOR_BUILDING) {
             int openMiner = countOpen(board, BotJobType.MINER);
@@ -105,13 +91,12 @@ public class VillageJobPlanner {
             for (int i = 0; i < toCreate; i++) {
                 BlockPos mineSpot = findMineSpot(level, center, 10);
                 if (mineSpot == null) break;
-
                 if (board.hasOpenTicketNear(BotJobType.MINER, mineSpot, 4)) continue;
                 board.post(new JobTicket(UUID.randomUUID(), BotJobType.MINER, 9, mineSpot, now));
             }
         }
 
-        // 3) Hauler tickets (generic ground cleanup)
+        // Generic hauling cleanup
         if (data.hasStoragePos()) {
             int openHaul = countOpen(board, BotJobType.HAULER);
             int budget = Math.max(0, MAX_OPEN_HAUL_TICKETS - openHaul);
@@ -138,14 +123,6 @@ public class VillageJobPlanner {
         }
     }
 
-    /**
-     * Stap 7: project-driven supply.
-     * - Pak de volgende blueprint step.
-     * - Bepaal het cost item.
-     * - Check ledger buffer.
-     * - Post producer tickets (lumber/miner) waar mogelijk.
-     * - Post haul tickets als items al op de grond liggen.
-     */
     private static void tryPostProjectSupplyTickets(ServerLevel level, VillageData data, JobBoard board, BlockPos center, long now) {
         if (!data.hasActiveProject()) return;
         if (!data.hasStoragePos()) return;
@@ -165,7 +142,6 @@ public class VillageJobPlanner {
 
         String itemId = BuiltInRegistries.ITEM.getKey(costItem).toString();
 
-        // Find settlement near center
         VillageManagerData mgr = VillageManagerData.get(level);
         Optional<VillageManagerData.VillageRecord> nearest = mgr.findNearest(level, center, PROJECT_CHECK_RADIUS);
         if (nearest.isEmpty()) return;
@@ -174,35 +150,35 @@ public class VillageJobPlanner {
         SettlementState st = mgr.getState(vid);
 
         int have = st.getCount(itemId);
-        if (have >= PROJECT_ITEM_BUFFER) return; // genoeg buffer -> niets doen
+        if (have >= PROJECT_ITEM_BUFFER) return;
 
         int need = PROJECT_ITEM_BUFFER - have;
 
-        // 1) Producer ticket (als we het kunnen produceren)
-        // Anti-spam: beperkte open producer tickets totaal
+        // Producer ticket
         int openProduceBudget = Math.max(0, MAX_OPEN_PROJECT_PRODUCE - countOpenProducer(board));
         if (openProduceBudget > 0) {
             BotJobType producer = mapItemToProducer(itemId);
 
             if (producer == BotJobType.LUMBERJACK) {
-                // logs kunnen we produceren
                 BlockPos log = findNaturalLog(level, center, LOG_SEARCH_RADIUS);
                 if (log != null && !board.hasOpenTicketNear(BotJobType.LUMBERJACK, log, 4)) {
                     board.post(JobTicket.material(BotJobType.LUMBERJACK, 20, log, now, itemId, Math.max(1, need)));
                 }
             } else if (producer == BotJobType.MINER) {
-                // cobble kunnen we produceren
                 BlockPos mineSpot = findMineSpot(level, center, 10);
                 if (mineSpot != null && !board.hasOpenTicketNear(BotJobType.MINER, mineSpot, 4)) {
                     board.post(JobTicket.material(BotJobType.MINER, 18, mineSpot, now, itemId, Math.max(1, need)));
                 }
-            } else {
-                // planks/overig: nog geen crafting/farming -> producer is null
-                // (Later: CraftingJob/FarmerJob)
+            } else if (producer == BotJobType.CRAFTER) {
+                // Crafting gebeurt bij storage
+                BlockPos storage = data.getStoragePos();
+                if (storage != null && !board.hasOpenTicketNear(BotJobType.CRAFTER, storage, 2)) {
+                    board.post(JobTicket.material(BotJobType.CRAFTER, 19, storage, now, itemId, Math.max(1, need)));
+                }
             }
         }
 
-        // 2) Haul tickets voor dit item (alleen als er drops bestaan)
+        // Haul tickets als items al op de grond liggen
         int openMaterialHaul = countOpenMaterial(board, BotJobType.HAULER, itemId);
         int haulBudget = Math.max(0, MAX_OPEN_PROJECT_HAUL - openMaterialHaul);
         if (haulBudget <= 0) return;
@@ -230,26 +206,14 @@ public class VillageJobPlanner {
         }
     }
 
-    /**
-     * Map itemId -> producer job.
-     * - logs: lumberjack
-     * - cobble: miner
-     * - planks: (nog niet produceerbaar zonder crafting-job) -> null
-     */
     private static BotJobType mapItemToProducer(String itemId) {
         if (itemId == null) return null;
 
-        if (itemId.endsWith("_log") || itemId.contains(":oak_log") || itemId.contains(":spruce_log")
-                || itemId.contains(":birch_log") || itemId.contains(":jungle_log")
-                || itemId.contains(":acacia_log") || itemId.contains(":dark_oak_log")) {
-            return BotJobType.LUMBERJACK;
-        }
+        if (itemId.endsWith("_log")) return BotJobType.LUMBERJACK;
+        if (ITEM_COBBLE.equals(itemId)) return BotJobType.MINER;
 
-        if (ITEM_COBBLE.equals(itemId)) {
-            return BotJobType.MINER;
-        }
+        if (itemId.endsWith("_planks")) return BotJobType.CRAFTER;
 
-        // planks -> later crafting job
         return null;
     }
 
@@ -285,7 +249,11 @@ public class VillageJobPlanner {
         int n = 0;
         for (JobTicket t : board.getAllTickets()) {
             if (t.getStatus() != JobStatus.OPEN) continue;
-            if (t.getType() == BotJobType.LUMBERJACK || t.getType() == BotJobType.MINER) n++;
+            if (t.getType() == BotJobType.LUMBERJACK
+                    || t.getType() == BotJobType.MINER
+                    || t.getType() == BotJobType.CRAFTER) {
+                n++;
+            }
         }
         return n;
     }

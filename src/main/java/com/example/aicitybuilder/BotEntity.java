@@ -37,9 +37,6 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
-/**
- * Humanoid bot entity met settlement membership + job tickets + consume-first building.
- */
 public class BotEntity extends PathfinderMob {
 
     public enum ProgressionStage {
@@ -92,8 +89,6 @@ public class BotEntity extends PathfinderMob {
 
     public SimpleContainer getInventory() { return inventory; }
 
-    // ---- Ticket API (type-safe) ----
-
     public Optional<JobTicket> getActiveTicket() {
         UUID id = this.activeTicketId;
         if (id == null) return Optional.empty();
@@ -117,8 +112,6 @@ public class BotEntity extends PathfinderMob {
         }
         activeTicketId = null;
     }
-
-    // ---- Village / Settlement ----
 
     @Nullable
     public VillageData getVillageData() {
@@ -155,8 +148,6 @@ public class BotEntity extends PathfinderMob {
         VillageStructures.ensureStorageHouse(serverLevel, data);
     }
 
-    // ---- Vanilla ----
-
     @Override
     public boolean removeWhenFarAway(double distanceToClosestPlayer) {
         return false;
@@ -192,18 +183,19 @@ public class BotEntity extends PathfinderMob {
         // Producer jobs
         this.goalSelector.addGoal(2, new LumberjackGoal(this));
         this.goalSelector.addGoal(3, new MinerGoal(this));
+        this.goalSelector.addGoal(4, new CrafterGoal(this));
 
         // Transport + build
-        this.goalSelector.addGoal(4, new HaulItemGoal(this));
-        this.goalSelector.addGoal(5, new BuilderGoal(this));
+        this.goalSelector.addGoal(5, new HaulItemGoal(this));
+        this.goalSelector.addGoal(6, new BuilderGoal(this));
 
         // Deposit items to stockpile
-        this.goalSelector.addGoal(6, new DepositToStorageGoal(this));
+        this.goalSelector.addGoal(7, new DepositToStorageGoal(this));
 
         // Idle behavior
-        this.goalSelector.addGoal(7, new WaterAvoidingRandomStrollGoal(this, 1.0D));
-        this.goalSelector.addGoal(8, new LookAtPlayerGoal(this, Player.class, 8.0F));
-        this.goalSelector.addGoal(9, new RandomLookAroundGoal(this));
+        this.goalSelector.addGoal(8, new WaterAvoidingRandomStrollGoal(this, 1.0D));
+        this.goalSelector.addGoal(9, new LookAtPlayerGoal(this, Player.class, 8.0F));
+        this.goalSelector.addGoal(10, new RandomLookAroundGoal(this));
     }
 
     public static AttributeSupplier.Builder createAttributes() {
@@ -292,28 +284,28 @@ public class BotEntity extends PathfinderMob {
         }
     }
 
-    // ---- Job assignment (nu ook MINER erbij) ----
-
+    /**
+     * Job rotatie (nu ook CRAFTER erbij)
+     * lumber -> haul -> miner -> crafter -> builder
+     */
     private void ensureJobAssigned() {
         if (this.jobAssigned) return;
         if (this.level().isClientSide) return;
 
         int index = JOB_COUNTER++;
 
-        // rotatie: lumber -> haul -> miner -> builder
-        int slot = Math.floorMod(index, 4);
+        int slot = Math.floorMod(index, 5);
         BotJobType chosen = switch (slot) {
             case 0 -> BotJobType.LUMBERJACK;
             case 1 -> BotJobType.HAULER;
             case 2 -> BotJobType.MINER;
+            case 3 -> BotJobType.CRAFTER;
             default -> BotJobType.BUILDER;
         };
 
         this.setJob(chosen);
         this.jobAssigned = true;
     }
-
-    // ---- Storage ----
 
     private void handleStorageLogic() {
         storageTickCounter++;
@@ -328,8 +320,6 @@ public class BotEntity extends PathfinderMob {
             depositInventoryToChest(data.getStoragePos());
         }
     }
-
-    // ---- Build (consume-first) ----
 
     private void handleBuildLogic() {
         if (!(this.level() instanceof ServerLevel serverLevel)) return;
@@ -396,8 +386,6 @@ public class BotEntity extends PathfinderMob {
         serverLevel.setBlock(placePos, target, 3);
         data.advanceProjectStep();
     }
-
-    // ---- Inventory helpers ----
 
     public boolean isInventoryAlmostFull() {
         int filled = 0;

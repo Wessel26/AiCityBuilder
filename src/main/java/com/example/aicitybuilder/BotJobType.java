@@ -10,7 +10,8 @@ public enum BotJobType {
     MINER,      // Mijnwerker
     BUILDER,    // Bouwer
     FARMER,     // Boer
-    TRADER;     // Handelaar
+    TRADER,// Handelaar
+    CRAFTER;
 
     public String getDisplayName() {
         return switch (this) {
@@ -20,6 +21,7 @@ public enum BotJobType {
             case BUILDER -> "Bouwer";
             case FARMER -> "Boer";
             case TRADER -> "Handelaar";
+            case CRAFTER -> "Ambachtsman";
         };
     }
 }
