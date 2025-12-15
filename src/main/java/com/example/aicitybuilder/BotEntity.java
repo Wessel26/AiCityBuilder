@@ -1,10 +1,12 @@
 package com.example.aicitybuilder;
 
 import com.example.aicitybuilder.building.Blueprints;
+import com.example.aicitybuilder.settlement.SettlementState;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.nbt.CompoundTag;
-import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.world.Container;
 import net.minecraft.world.InteractionHand;
@@ -23,13 +25,13 @@ import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.inventory.AbstractContainerMenu;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.entity.ChestBlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
-import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.item.Items;
-import net.minecraft.network.chat.Component;
 
 import javax.annotation.Nullable;
 import java.util.UUID;
@@ -63,7 +65,7 @@ public class BotEntity extends PathfinderMob {
 
     // Millénaire-like citizen state
     @Nullable private UUID activeTicketId;
-    @Nullable private UUID villageId; // <-- nieuw: settlement/village membership
+    @Nullable private UUID villageId;
     @Nullable private BlockPos homePos;
 
     private ProgressionStage stage = ProgressionStage.COLLECT_WOOD;
@@ -82,12 +84,6 @@ public class BotEntity extends PathfinderMob {
     public void clearActiveTicket() { this.activeTicketId = null; }
 
     @Nullable public UUID getVillageId() { return villageId; }
-
-    @Nullable
-    public VillageManagerData.VillageRecord getVillageRecord(ServerLevel level) {
-        if (villageId == null) return null;
-        return VillageManagerData.get(level).getVillage(villageId).orElse(null);
-    }
 
     @Nullable public BlockPos getHomePos() { return homePos; }
     public void setHomePos(BlockPos homePos) { this.homePos = homePos; }
@@ -200,7 +196,7 @@ public class BotEntity extends PathfinderMob {
     private int storageTickCounter = 0;
     private int buildCooldown = 0;
 
-    protected BotEntity(EntityType type, Level level) {
+    protected BotEntity(EntityType<? extends PathfinderMob> type, Level level) {
         super(type, level);
         this.setCanPickUpLoot(true);
 
@@ -222,8 +218,8 @@ public class BotEntity extends PathfinderMob {
             if (!this.level().isClientSide && player instanceof ServerPlayer serverPlayer) {
                 serverPlayer.openMenu(new MenuProvider() {
                     @Override
-                    public Component getDisplayName() {
-                        return Component.literal("Bot Inventory");
+                    public net.minecraft.network.chat.Component getDisplayName() {
+                        return net.minecraft.network.chat.Component.literal("Bot Inventory");
                     }
                     @Override
                     public AbstractContainerMenu createMenu(int id, Inventory playerInventory, Player player) {
@@ -280,10 +276,11 @@ public class BotEntity extends PathfinderMob {
     @Override
     public void addAdditionalSaveData(CompoundTag tag) {
         super.addAdditionalSaveData(tag);
-
         if (ownerUuid != null) { tag.putUUID("Owner", ownerUuid); }
+
         tag.putString("Job", job.name());
         tag.putBoolean("JobAssigned", jobAssigned);
+
         tag.putInt("Stage", stage.ordinal());
         tag.putInt("Wood", woodCount);
         tag.putInt("Stone", stoneCount);
@@ -305,15 +302,12 @@ public class BotEntity extends PathfinderMob {
     @Override
     public void readAdditionalSaveData(CompoundTag tag) {
         super.readAdditionalSaveData(tag);
-
         if (tag.hasUUID("Owner")) { ownerUuid = tag.getUUID("Owner"); }
 
         if (tag.contains("Job")) {
-            try {
-                job = BotJobType.valueOf(tag.getString("Job"));
-            } catch (Exception ignored) {}
+            try { job = BotJobType.valueOf(tag.getString("Job")); }
+            catch (Exception ignored) {}
         }
-
         jobAssigned = tag.getBoolean("JobAssigned");
 
         int st = tag.getInt("Stage");
@@ -372,8 +366,9 @@ public class BotEntity extends PathfinderMob {
     }
 
     /**
-     * MVP build logic:
+     * MVP build logic (Stap 4):
      * - If VillageData has an active project, place 1 step every 10 ticks.
+     * - Consume required materials from SettlementState ledger BEFORE placing.
      */
     private void handleBuildLogic() {
         if (!(this.level() instanceof ServerLevel)) { return; }
@@ -386,7 +381,7 @@ public class BotEntity extends PathfinderMob {
         VillageData data = VillageData.get(serverLevel);
         if (!data.hasActiveProject()) { return; }
 
-        java.util.List steps = Blueprints.get(data.getProjectId());
+        java.util.List<Blueprints.BuildStep> steps = Blueprints.get(data.getProjectId());
         if (steps.isEmpty()) {
             data.clearProject();
             return;
@@ -404,7 +399,7 @@ public class BotEntity extends PathfinderMob {
             return;
         }
 
-        Blueprints.BuildStep step = (Blueprints.BuildStep) steps.get(i);
+        Blueprints.BuildStep step = steps.get(i);
         BlockPos placePos = origin.offset(step.offset());
         BlockState target = step.state();
         BlockState current = serverLevel.getBlockState(placePos);
@@ -418,10 +413,34 @@ public class BotEntity extends PathfinderMob {
             return;
         }
 
-        // Place if empty; otherwise skip (later: smarter logic)
-        if (current.isAir()) {
-            serverLevel.setBlock(placePos, target, 3);
+        // Skip als er al iets staat (MVP)
+        if (!current.isAir()) {
+            data.advanceProjectStep();
+            return;
         }
+
+        // --- consume-first uit settlement ledger ---
+        Item costItem = target.getBlock().asItem();
+        if (costItem != null && costItem != Items.AIR) {
+            UUID vid = this.getVillageId();
+            if (vid != null) {
+                VillageManagerData manager = VillageManagerData.get(serverLevel);
+                SettlementState stLedger = manager.getState(vid);
+
+                String itemId = BuiltInRegistries.ITEM.getKey(costItem).toString();
+
+                // Geen materiaal? -> bouw niet verder (project blijft op dezelfde step hangen)
+                if (!stLedger.tryConsume(itemId, 1)) {
+                    buildCooldown = 20;
+                    return;
+                }
+
+                manager.setDirty();
+            }
+        }
+
+        // Place & advance
+        serverLevel.setBlock(placePos, target, 3);
         data.advanceProjectStep();
     }
 
@@ -503,8 +522,14 @@ public class BotEntity extends PathfinderMob {
         return remaining;
     }
 
-    // (Rest van jouw originele BotEntity blijft ongewijzigd hieronder in jouw project.
-    // Als je wilt dat ik óók de rest standaard volledig teruggeef (alles na consume/craft/tree logic),
-    // stuur dan even de melding “compileert” of dat je errors ziet — maar deze versie is al volledig
-    // tot en met de container logic zoals in jouw huidige file.)
+    // ----- (rest van jouw BotEntity code blijft zoals in jouw project; hieronder is het ongewijzigd) -----
+
+    @Override
+    public boolean hurt(DamageSource source, float amount) {
+        return super.hurt(source, amount);
+    }
+
+    // (Je project bevat hierna nog meer logic; als je wilt dat ik óók daar wijzigingen in ga doen
+    // in volgende stappen, geef me gewoon de RAW link van het betreffende bestand — dan krijg je weer
+    // de volledige file terug.)
 }

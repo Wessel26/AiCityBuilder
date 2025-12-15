@@ -33,14 +33,25 @@ public class JobBoard {
     public void clearClaim(UUID botId) {
         UUID ticketId = claimedByBot.remove(botId);
         if (ticketId != null) {
-            JobTicket t = ticketsById.get(ticketId);
             // Laat status staan (CLAIMED) om dubbele claims te voorkomen.
             // Fail/complete gebeurt expliciet.
+            JobTicket t = ticketsById.get(ticketId);
+            // no-op (bewust)
         }
     }
 
     public void post(JobTicket ticket) {
         ticketsById.put(ticket.getId(), ticket);
+    }
+
+    /**
+     * Post ticket alleen als er nog geen OPEN ticket van hetzelfde type in de buurt hangt.
+     * Handig om spam te voorkomen in planners (Stap 5).
+     */
+    public void postIfNoOpenTicketNear(JobTicket ticket, int rangeBlocks) {
+        if (!hasOpenTicketNear(ticket.getType(), ticket.getTarget(), rangeBlocks)) {
+            post(ticket);
+        }
     }
 
     public boolean hasOpenTicketNear(BotJobType type, BlockPos target, int rangeBlocks) {
@@ -55,6 +66,10 @@ public class JobBoard {
         return false;
     }
 
+    /**
+     * Claim de "beste" ticket voor deze bot.
+     * Score: priority zwaar, afstand licht.
+     */
     public Optional<JobTicket> claimBest(UUID botId, BotJobType preferredType, BlockPos botPos) {
         // 1 bot = 1 ticket tegelijk
         if (claimedByBot.containsKey(botId)) {
@@ -68,7 +83,6 @@ public class JobBoard {
             if (!t.isClaimable()) continue;
             if (preferredType != null && t.getType() != preferredType) continue;
 
-            // Score: priority zwaar, afstand licht.
             double dist = botPos.distSqr(t.getTarget());
             double score = (t.getPriority() * 1000.0) - dist;
 
@@ -88,7 +102,9 @@ public class JobBoard {
     public void complete(UUID ticketId) {
         JobTicket t = ticketsById.get(ticketId);
         if (t == null) return;
+
         t.complete();
+
         if (t.getClaimedBy() != null) {
             claimedByBot.remove(t.getClaimedBy());
         }
@@ -97,7 +113,9 @@ public class JobBoard {
     public void fail(UUID ticketId) {
         JobTicket t = ticketsById.get(ticketId);
         if (t == null) return;
+
         t.fail();
+
         if (t.getClaimedBy() != null) {
             claimedByBot.remove(t.getClaimedBy());
         }
@@ -110,7 +128,11 @@ public class JobBoard {
         Iterator<Map.Entry<UUID, JobTicket>> it = ticketsById.entrySet().iterator();
         while (it.hasNext()) {
             JobTicket t = it.next().getValue();
-            if (t.getStatus() == JobStatus.OPEN || t.getStatus() == JobStatus.CLAIMED) continue;
+
+            if (t.getStatus() == JobStatus.OPEN || t.getStatus() == JobStatus.CLAIMED) {
+                continue;
+            }
+
             if (nowGameTime - t.getCreatedAtGameTime() > ttlTicks) {
                 it.remove();
             }

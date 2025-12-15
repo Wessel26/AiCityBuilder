@@ -14,7 +14,6 @@ import java.util.Optional;
  * Dit is de "dispatcher" die Millénaire-achtige orde geeft.
  */
 public class ClaimJobGoal extends Goal {
-
     private final BotEntity bot;
     private int cooldown = 0;
 
@@ -53,7 +52,6 @@ public class ClaimJobGoal extends Goal {
 
         // Als bot al een actief ticket heeft, niets doen
         if (bot.getActiveTicketId() != null) {
-            // check of ticket nog bestaat
             Optional<JobTicket> t = village.getJobBoard().getTicket(bot.getActiveTicketId());
             if (t.isEmpty()) {
                 bot.clearActiveTicket();
@@ -62,6 +60,7 @@ public class ClaimJobGoal extends Goal {
         }
 
         BotJobType preferred = bot.getJob();
+
         // TRADER is geen "werk-ticket". Als inventory vol -> deposit goal pakt dat op.
         if (preferred == BotJobType.TRADER) return;
 
