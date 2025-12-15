@@ -1,6 +1,8 @@
 package com.example.aicitybuilder.village;
 
+import com.example.aicitybuilder.BotEntity;
 import com.example.aicitybuilder.BotJobType;
+import com.example.aicitybuilder.ModEntities;
 import com.example.aicitybuilder.VillageData;
 import com.example.aicitybuilder.VillageManagerData;
 import com.example.aicitybuilder.building.Blueprints;
@@ -9,9 +11,11 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.tags.BlockTags;
+import net.minecraft.world.entity.MobSpawnType;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
 import net.minecraftforge.event.TickEvent;
@@ -23,7 +27,7 @@ import java.util.UUID;
 
 public class VillageJobPlanner {
 
-    private static final int PLAN_INTERVAL_TICKS = 100;
+    private static final int PLAN_INTERVAL_TICKS = 100; // 5 sec
 
     private static final int LOG_SEARCH_RADIUS = 20;
     private static final int ITEM_SEARCH_RADIUS = 24;
@@ -44,32 +48,55 @@ public class VillageJobPlanner {
 
     private static final String ITEM_COBBLE = "minecraft:cobblestone";
 
+    // POPULATION
+    private static final int POP_SYNC_INTERVAL_TICKS = 200; // 10 sec
+    private static final int POP_SYNC_RADIUS = 160;
+    private static final int POP_SPAWN_ATTEMPTS = 10;
+
+    // FOOD (MVP)
+    private static final String FOOD_BREAD = "minecraft:bread";
+    private static final String FOOD_POTATO = "minecraft:potato";
+    private static final String FOOD_CARROT = "minecraft:carrot";
+
+    private static final int FOOD_LOW_THRESHOLD = 24; // units
+    private static final int FOOD_SPAWN_COST_UNITS = 16; // 16 potato OR 16 carrot OR 8 bread
+
+    private static final int MAX_OPEN_FARMER_TICKETS = 2;
+
     private int cooldown = 0;
+    private int popSyncCooldown = 0;
 
     @SubscribeEvent
     public void onLevelTick(TickEvent.LevelTickEvent event) {
         if (event.phase != TickEvent.Phase.END) return;
         if (!(event.level instanceof ServerLevel level)) return;
 
+        VillageData data = VillageData.get(level);
+        if (data == null || !data.hasCenter()) return;
+
+        BlockPos center = data.getCenter();
+        long now = level.getGameTime();
+
+        // POPULATION: sync + spawn (food gated)
+        handlePopulation(level, data, center, now);
+
+        // planning throttled
         if (cooldown > 0) {
             cooldown--;
             return;
         }
         cooldown = PLAN_INTERVAL_TICKS;
 
-        VillageData data = VillageData.get(level);
-        if (data == null || !data.hasCenter()) return;
-
         JobBoard board = data.getJobBoard();
-        long now = level.getGameTime();
         board.cleanup(now, 20L * 60L * 5L);
 
-        BlockPos center = data.getCenter();
+        // FOOD need -> FARMER tickets
+        tryPostFarmerTickets(level, data, board, center, now);
 
         // Project-driven supply
         tryPostProjectSupplyTickets(level, data, board, center, now);
 
-        // Legacy lumber need
+        // Legacy lumber
         if (data.getTotalLogs() < MIN_LOGS_FOR_BUILDING) {
             int openLumber = countOpen(board, BotJobType.LUMBERJACK);
             int toCreate = Math.max(0, MAX_OPEN_LUMBER_TICKETS - openLumber);
@@ -123,6 +150,101 @@ public class VillageJobPlanner {
         }
     }
 
+    // ---------------- POPULATION (FOOD GATED) ----------------
+
+    private void handlePopulation(ServerLevel level, VillageData data, BlockPos center, long now) {
+        // sync echte bot count soms
+        if (popSyncCooldown-- <= 0) {
+            popSyncCooldown = POP_SYNC_INTERVAL_TICKS;
+
+            int r = POP_SYNC_RADIUS;
+            AABB box = new AABB(
+                    center.getX() - r, center.getY() - 64, center.getZ() - r,
+                    center.getX() + r, center.getY() + 64, center.getZ() + r
+            );
+
+            int count = level.getEntitiesOfClass(BotEntity.class, box, e -> e.isAlive()).size();
+            data.setPopulation(count);
+        }
+
+        if (!data.canSpawnCitizen(now)) return;
+
+        // Food gating: we moeten food kunnen consumeren uit settlement ledger
+        VillageManagerData mgr = VillageManagerData.get(level);
+        Optional<VillageManagerData.VillageRecord> nearest = mgr.findNearest(level, center, PROJECT_CHECK_RADIUS);
+        if (nearest.isEmpty()) return;
+
+        SettlementState st = mgr.getState(nearest.get().id);
+
+        if (!tryConsumeFoodForSpawn(st)) {
+            // niet genoeg food -> geen spawn
+            return;
+        }
+
+        // Spawn bot bij center (surface)
+        for (int tries = 0; tries < POP_SPAWN_ATTEMPTS; tries++) {
+            int dx = level.random.nextInt(7) - 3;
+            int dz = level.random.nextInt(7) - 3;
+            int x = center.getX() + dx;
+            int z = center.getZ() + dz;
+            int y = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x, z);
+
+            BotEntity bot = ModEntities.PLAYER_BOT.get().create(level);
+            if (bot == null) return;
+
+            bot.moveTo(x + 0.5D, y, z + 0.5D, level.random.nextFloat() * 360.0F, 0.0F);
+            bot.finalizeSpawn(level, level.getCurrentDifficultyAt(bot.blockPosition()), MobSpawnType.NATURAL, null, null);
+
+            level.addFreshEntity(bot);
+
+            data.setPopulation(data.getPopulation() + 1);
+            data.markSpawned(now);
+            mgr.setDirty();
+            return;
+        }
+
+        // Als spawn faalt, food was al geconsumeerd.
+        // MVP: laten we dat accepteren (rare edge-case). Later: refund.
+    }
+
+    private static boolean tryConsumeFoodForSpawn(SettlementState st) {
+        // voorkeur: potato -> carrot -> bread (bread is duurder, kost 8)
+        if (st.tryConsume(FOOD_POTATO, FOOD_SPAWN_COST_UNITS)) return true;
+        if (st.tryConsume(FOOD_CARROT, FOOD_SPAWN_COST_UNITS)) return true;
+        if (st.tryConsume(FOOD_BREAD, 8)) return true;
+        return false;
+    }
+
+    private static int foodUnits(SettlementState st) {
+        // MVP units:
+        // potato=1, carrot=1, bread=2
+        int potato = st.getCount(FOOD_POTATO);
+        int carrot = st.getCount(FOOD_CARROT);
+        int bread = st.getCount(FOOD_BREAD);
+        return potato + carrot + (bread * 2);
+    }
+
+    private static void tryPostFarmerTickets(ServerLevel level, VillageData data, JobBoard board, BlockPos center, long now) {
+        VillageManagerData mgr = VillageManagerData.get(level);
+        Optional<VillageManagerData.VillageRecord> nearest = mgr.findNearest(level, center, PROJECT_CHECK_RADIUS);
+        if (nearest.isEmpty()) return;
+
+        SettlementState st = mgr.getState(nearest.get().id);
+
+        int units = foodUnits(st);
+        if (units >= FOOD_LOW_THRESHOLD) return;
+
+        int openFarmer = countOpen(board, BotJobType.FARMER);
+        int toCreate = Math.max(0, MAX_OPEN_FARMER_TICKETS - openFarmer);
+
+        for (int i = 0; i < toCreate; i++) {
+            if (board.hasOpenTicketNear(BotJobType.FARMER, center, 4)) break;
+            board.post(new JobTicket(UUID.randomUUID(), BotJobType.FARMER, 12, center, now));
+        }
+    }
+
+    // ------------- PROJECT SUPPLY -------------
+
     private static void tryPostProjectSupplyTickets(ServerLevel level, VillageData data, JobBoard board, BlockPos center, long now) {
         if (!data.hasActiveProject()) return;
         if (!data.hasStoragePos()) return;
@@ -154,7 +276,6 @@ public class VillageJobPlanner {
 
         int need = PROJECT_ITEM_BUFFER - have;
 
-        // Producer ticket
         int openProduceBudget = Math.max(0, MAX_OPEN_PROJECT_PRODUCE - countOpenProducer(board));
         if (openProduceBudget > 0) {
             BotJobType producer = mapItemToProducer(itemId);
@@ -170,7 +291,6 @@ public class VillageJobPlanner {
                     board.post(JobTicket.material(BotJobType.MINER, 18, mineSpot, now, itemId, Math.max(1, need)));
                 }
             } else if (producer == BotJobType.CRAFTER) {
-                // Crafting gebeurt bij storage
                 BlockPos storage = data.getStoragePos();
                 if (storage != null && !board.hasOpenTicketNear(BotJobType.CRAFTER, storage, 2)) {
                     board.post(JobTicket.material(BotJobType.CRAFTER, 19, storage, now, itemId, Math.max(1, need)));
@@ -178,7 +298,6 @@ public class VillageJobPlanner {
             }
         }
 
-        // Haul tickets als items al op de grond liggen
         int openMaterialHaul = countOpenMaterial(board, BotJobType.HAULER, itemId);
         int haulBudget = Math.max(0, MAX_OPEN_PROJECT_HAUL - openMaterialHaul);
         if (haulBudget <= 0) return;
@@ -208,12 +327,9 @@ public class VillageJobPlanner {
 
     private static BotJobType mapItemToProducer(String itemId) {
         if (itemId == null) return null;
-
         if (itemId.endsWith("_log")) return BotJobType.LUMBERJACK;
         if (ITEM_COBBLE.equals(itemId)) return BotJobType.MINER;
-
         if (itemId.endsWith("_planks")) return BotJobType.CRAFTER;
-
         return null;
     }
 
@@ -266,14 +382,13 @@ public class VillageJobPlanner {
             int x = center.getX() + dx;
             int z = center.getZ() + dz;
 
-            int y = level.getHeight(net.minecraft.world.level.levelgen.Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x, z);
+            int y = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x, z);
             BlockPos base = new BlockPos(x, y, z);
 
             for (int dy = -6; dy <= 6; dy++) {
                 BlockPos p = base.offset(0, dy, 0);
                 BlockState s = level.getBlockState(p);
                 if (!s.is(BlockTags.LOGS)) continue;
-
                 if (hasLeavesAbove(level, p)) return p.immutable();
             }
         }
@@ -296,7 +411,7 @@ public class VillageJobPlanner {
             int x = center.getX() + dx;
             int z = center.getZ() + dz;
 
-            int surfaceY = level.getHeight(net.minecraft.world.level.levelgen.Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x, z);
+            int surfaceY = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x, z);
             for (int dy = 2; dy <= 12; dy++) {
                 BlockPos p = new BlockPos(x, surfaceY - dy, z);
                 BlockState s = level.getBlockState(p);

@@ -40,14 +40,6 @@ import java.util.UUID;
 
 public class BotEntity extends PathfinderMob {
 
-    public enum ProgressionStage {
-        COLLECT_WOOD,
-        COLLECT_STONE,
-        COLLECT_IRON,
-        COLLECT_DIAMOND,
-        DONE
-    }
-
     @Nullable private UUID ownerUuid;
 
     private static int JOB_COUNTER = 0;
@@ -56,16 +48,9 @@ public class BotEntity extends PathfinderMob {
 
     @Nullable private UUID activeTicketId;
     @Nullable private UUID villageId;
+
     @Nullable private BlockPos homePos;
 
-    private ProgressionStage stage = ProgressionStage.COLLECT_WOOD;
-
-    int woodCount = 0;
-    int stoneCount = 0;
-    int ironCount = 0;
-    int diamondCount = 0;
-
-    // Echte inventory voor de bot
     private final SimpleContainer inventory = new SimpleContainer(36);
 
     private int storageTickCounter = 0;
@@ -77,6 +62,27 @@ public class BotEntity extends PathfinderMob {
         this.setPersistenceRequired();
     }
 
+    // -------- Owner (fix for BotCommands) --------
+    public void setOwner(ServerPlayer player) {
+        this.ownerUuid = player.getUUID();
+    }
+
+    @Nullable
+    public UUID getOwnerUuid() {
+        return ownerUuid;
+    }
+
+    // -------- HomePos (fix for GoHomeAtNightGoal / SettlementData) --------
+    @Nullable
+    public BlockPos getHomePos() {
+        return homePos;
+    }
+
+    public void setHomePos(@Nullable BlockPos homePos) {
+        this.homePos = homePos;
+    }
+
+    // -------- Jobs --------
     public BotJobType getJob() { return job; }
     public void setJob(BotJobType job) { this.job = job; }
 
@@ -85,9 +91,6 @@ public class BotEntity extends PathfinderMob {
     public void clearActiveTicket() { this.activeTicketId = null; }
 
     @Nullable public UUID getVillageId() { return villageId; }
-
-    @Nullable public BlockPos getHomePos() { return homePos; }
-    public void setHomePos(BlockPos homePos) { this.homePos = homePos; }
 
     public SimpleContainer getInventory() { return inventory; }
 
@@ -137,13 +140,16 @@ public class BotEntity extends PathfinderMob {
         }
 
         VillageManagerData.VillageRecord rec = manager.getVillage(villageId).orElse(null);
-        if (rec != null && this.homePos == null) this.homePos = rec.centerPos();
 
         VillageData data = VillageData.get(serverLevel);
         if (rec != null && !data.hasCenter()) data.setCenter(rec.centerPos());
+
         if (this.homePos == null && data.hasCenter()) this.homePos = data.getCenter();
 
         VillageStructures.ensureStorageHouse(serverLevel, data);
+
+        data.bootstrapQueueIfNeeded();
+        data.startNextFromQueueIfIdle();
     }
 
     @Override
@@ -175,24 +181,26 @@ public class BotEntity extends PathfinderMob {
     @Override
     protected void registerGoals() {
         this.goalSelector.addGoal(0, new GoHomeAtNightGoal(this));
+
         this.goalSelector.addGoal(1, new ClaimJobGoal(this));
 
         // Producer jobs
         this.goalSelector.addGoal(2, new LumberjackGoal(this));
         this.goalSelector.addGoal(3, new MinerGoal(this));
-        this.goalSelector.addGoal(4, new CrafterGoal(this));
+        this.goalSelector.addGoal(4, new FarmerGoal(this));
+        this.goalSelector.addGoal(5, new CrafterGoal(this));
 
         // Transport + build
-        this.goalSelector.addGoal(5, new HaulItemGoal(this));
-        this.goalSelector.addGoal(6, new BuilderGoal(this));
+        this.goalSelector.addGoal(6, new HaulItemGoal(this));
+        this.goalSelector.addGoal(7, new BuilderGoal(this));
 
         // Deposit items to stockpile
-        this.goalSelector.addGoal(7, new DepositToStorageGoal(this));
+        this.goalSelector.addGoal(8, new DepositToStorageGoal(this));
 
         // Idle
-        this.goalSelector.addGoal(8, new WaterAvoidingRandomStrollGoal(this, 1.0D));
-        this.goalSelector.addGoal(9, new LookAtPlayerGoal(this, Player.class, 8.0F));
-        this.goalSelector.addGoal(10, new RandomLookAroundGoal(this));
+        this.goalSelector.addGoal(9, new WaterAvoidingRandomStrollGoal(this, 1.0D));
+        this.goalSelector.addGoal(10, new LookAtPlayerGoal(this, Player.class, 8.0F));
+        this.goalSelector.addGoal(11, new RandomLookAroundGoal(this));
     }
 
     public static AttributeSupplier.Builder createAttributes() {
@@ -201,13 +209,7 @@ public class BotEntity extends PathfinderMob {
                 .add(Attributes.MOVEMENT_SPEED, 0.25D);
     }
 
-    public void setOwner(ServerPlayer player) { this.ownerUuid = player.getUUID(); }
-    @Nullable public UUID getOwnerUuid() { return ownerUuid; }
-
-    public ProgressionStage getStage() { return stage; }
-    public void setStage(ProgressionStage stage) { this.stage = stage; }
-
-    // ✅ FIX: items die de bot oppakt gaan in onze SimpleContainer inventory
+    // pickup -> SimpleContainer inventory
     @Override
     protected void pickUpItem(ItemEntity itemEntity) {
         if (this.level().isClientSide) return;
@@ -216,15 +218,12 @@ public class BotEntity extends PathfinderMob {
         ItemStack stack = itemEntity.getItem();
         if (stack.isEmpty()) return;
 
-        // probeer in bot-inventory te stoppen
         ItemStack remaining = addToInventory(stack.copy());
 
         if (remaining.isEmpty()) {
-            // alles gepakt
             this.onItemPickup(itemEntity);
             itemEntity.discard();
         } else {
-            // deels gepakt
             int taken = stack.getCount() - remaining.getCount();
             if (taken > 0) {
                 this.onItemPickup(itemEntity);
@@ -238,7 +237,6 @@ public class BotEntity extends PathfinderMob {
 
         ItemStack remaining = stack.copy();
 
-        // stacken op bestaande
         for (int i = 0; i < inventory.getContainerSize(); i++) {
             ItemStack slot = inventory.getItem(i);
             if (slot.isEmpty()) continue;
@@ -254,13 +252,11 @@ public class BotEntity extends PathfinderMob {
             if (remaining.isEmpty()) return ItemStack.EMPTY;
         }
 
-        // lege slot
         for (int i = 0; i < inventory.getContainerSize(); i++) {
-            ItemStack slot = inventory.getItem(i);
-            if (!slot.isEmpty()) continue;
-
-            inventory.setItem(i, remaining);
-            return ItemStack.EMPTY;
+            if (inventory.getItem(i).isEmpty()) {
+                inventory.setItem(i, remaining);
+                return ItemStack.EMPTY;
+            }
         }
 
         return remaining;
@@ -274,12 +270,6 @@ public class BotEntity extends PathfinderMob {
 
         tag.putString("Job", job.name());
         tag.putBoolean("JobAssigned", jobAssigned);
-
-        tag.putInt("Stage", stage.ordinal());
-        tag.putInt("Wood", woodCount);
-        tag.putInt("Stone", stoneCount);
-        tag.putInt("Iron", ironCount);
-        tag.putInt("Diamond", diamondCount);
 
         if (activeTicketId != null) tag.putUUID("ActiveTicket", activeTicketId);
         if (villageId != null) tag.putUUID("VillageId", villageId);
@@ -305,14 +295,6 @@ public class BotEntity extends PathfinderMob {
         }
         jobAssigned = tag.getBoolean("JobAssigned");
 
-        int st = tag.getInt("Stage");
-        if (st >= 0 && st < ProgressionStage.values().length) stage = ProgressionStage.values()[st];
-
-        woodCount = tag.getInt("Wood");
-        stoneCount = tag.getInt("Stone");
-        ironCount = tag.getInt("Iron");
-        diamondCount = tag.getInt("Diamond");
-
         if (tag.hasUUID("ActiveTicket")) this.activeTicketId = tag.getUUID("ActiveTicket");
         if (tag.hasUUID("VillageId")) this.villageId = tag.getUUID("VillageId");
 
@@ -333,19 +315,22 @@ public class BotEntity extends PathfinderMob {
         }
     }
 
+    /**
+     * lumber -> haul -> miner -> farmer -> crafter -> builder
+     */
     private void ensureJobAssigned() {
         if (this.jobAssigned) return;
         if (this.level().isClientSide) return;
 
         int index = JOB_COUNTER++;
 
-        // lumber -> haul -> miner -> crafter -> builder
-        int slot = Math.floorMod(index, 5);
+        int slot = Math.floorMod(index, 6);
         BotJobType chosen = switch (slot) {
             case 0 -> BotJobType.LUMBERJACK;
             case 1 -> BotJobType.HAULER;
             case 2 -> BotJobType.MINER;
-            case 3 -> BotJobType.CRAFTER;
+            case 3 -> BotJobType.FARMER;
+            case 4 -> BotJobType.CRAFTER;
             default -> BotJobType.BUILDER;
         };
 
@@ -386,7 +371,9 @@ public class BotEntity extends PathfinderMob {
 
         int i = data.getProjectStep();
         if (i >= steps.size()) {
-            data.clearProject();
+            String completedId = data.getProjectId();
+            data.onProjectCompleted(completedId);
+            data.completeProjectAndStartNext();
             return;
         }
 
@@ -478,8 +465,7 @@ public class BotEntity extends PathfinderMob {
         }
 
         for (int i = 0; i < container.getContainerSize(); i++) {
-            ItemStack slot = container.getItem(i);
-            if (slot.isEmpty()) {
+            if (container.getItem(i).isEmpty()) {
                 container.setItem(i, remaining);
                 return ItemStack.EMPTY;
             }

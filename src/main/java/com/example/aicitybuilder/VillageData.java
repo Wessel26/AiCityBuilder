@@ -31,8 +31,13 @@ public class VillageData extends SavedData {
     // Build queue
     private final Deque<QueuedProject> buildQueue = new ArrayDeque<>();
 
-    // NEW: voorkomt dat we bij elke load opnieuw 3 houses enqueuen
+    // voorkomt dat we bij elke load opnieuw 3 houses enqueuen
     private boolean queueInitialized = false;
+
+    // --- POPULATION (Stap 10) ---
+    private int population = 0;          // actuele bots (gesynct)
+    private int populationCap = 1;       // max bots toegestaan
+    private long lastSpawnGameTime = 0;  // throttle
 
     // Runtime-only
     private transient com.example.aicitybuilder.village.JobBoard jobBoard;
@@ -92,6 +97,15 @@ public class VillageData extends SavedData {
 
         data.queueInitialized = tag.getBoolean("QueueInitialized");
 
+        // POPULATION
+        if (tag.contains("Population")) data.population = tag.getInt("Population");
+        if (tag.contains("PopulationCap")) data.populationCap = tag.getInt("PopulationCap");
+        if (tag.contains("LastSpawn")) data.lastSpawnGameTime = tag.getLong("LastSpawn");
+
+        // safety
+        if (data.populationCap < 1) data.populationCap = 1;
+        if (data.population < 0) data.population = 0;
+
         return data;
     }
 
@@ -138,6 +152,11 @@ public class VillageData extends SavedData {
         tag.put("BuildQueue", qList);
 
         tag.putBoolean("QueueInitialized", queueInitialized);
+
+        // POPULATION
+        tag.putInt("Population", population);
+        tag.putInt("PopulationCap", populationCap);
+        tag.putLong("LastSpawn", lastSpawnGameTime);
 
         return tag;
     }
@@ -231,19 +250,22 @@ public class VillageData extends SavedData {
         setDirty();
     }
 
-    // --- NEW: auto bootstrap queue ---
+    // --- Auto bootstrap queue ---
     public boolean isQueueInitialized() { return queueInitialized; }
 
     public void bootstrapQueueIfNeeded() {
         if (queueInitialized) return;
         if (center == null) return;
 
-        // MVP: bouw 3 tiny houses naast het center
         enqueueProjectAutoOrigin("tiny_house");
         enqueueProjectAutoOrigin("tiny_house");
         enqueueProjectAutoOrigin("tiny_house");
 
         queueInitialized = true;
+
+        // baseline cap: 1 bot is ok; houses will add more
+        if (populationCap < 1) populationCap = 1;
+
         setDirty();
     }
 
@@ -251,11 +273,49 @@ public class VillageData extends SavedData {
         int col = index % 3;
         int row = index / 3;
         int spacing = 10;
-
         int dx = 6 + col * spacing;
         int dz = 6 + row * spacing;
-
         return center.offset(dx, 0, dz);
+    }
+
+    // --- POPULATION API (Stap 10) ---
+
+    public int getPopulation() { return population; }
+    public int getPopulationCap() { return populationCap; }
+
+    public void setPopulation(int population) {
+        this.population = Math.max(0, population);
+        setDirty();
+    }
+
+    public void setPopulationCap(int cap) {
+        this.populationCap = Math.max(1, cap);
+        setDirty();
+    }
+
+    public boolean canSpawnCitizen(long nowGameTime) {
+        if (!hasCenter()) return false;
+        if (population >= populationCap) return false;
+        // throttle: max 1 per 10 sec
+        return (nowGameTime - lastSpawnGameTime) >= 200L;
+    }
+
+    public void markSpawned(long nowGameTime) {
+        this.lastSpawnGameTime = nowGameTime;
+        setDirty();
+    }
+
+    /**
+     * Millénaire vibe: houses verhogen de cap.
+     * MVP: tiny_house completion => +1 cap
+     */
+    public void onProjectCompleted(String completedProjectId) {
+        if (completedProjectId == null) return;
+
+        if (completedProjectId.equals("tiny_house")) {
+            populationCap += 1;
+            setDirty();
+        }
     }
 
     private static class QueuedProject {
